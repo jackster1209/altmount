@@ -1295,7 +1295,7 @@ func (r *Repository) AddBytesDownloadedToDailyStat(ctx context.Context, bytes in
 		INSERT INTO import_daily_stats (day, bytes_downloaded, updated_at)
 		VALUES (date('now'), ?, datetime('now'))
 		ON CONFLICT(day) DO UPDATE SET
-		bytes_downloaded = bytes_downloaded + excluded.bytes_downloaded,
+		bytes_downloaded = import_daily_stats.bytes_downloaded + excluded.bytes_downloaded,
 		updated_at = datetime('now')
 	`
 
@@ -1312,7 +1312,7 @@ func (r *Repository) AddProviderBytesToHourlyStat(ctx context.Context, providerI
 		INSERT INTO provider_hourly_stats (hour, provider_id, bytes_downloaded, updated_at)
 		VALUES (?, ?, ?, datetime('now'))
 		ON CONFLICT(hour, provider_id) DO UPDATE SET
-			bytes_downloaded = bytes_downloaded + excluded.bytes_downloaded,
+			bytes_downloaded = provider_hourly_stats.bytes_downloaded + excluded.bytes_downloaded,
 			updated_at = datetime('now')
 	`
 
@@ -1563,7 +1563,7 @@ func (r *Repository) AddBytesDownloadedToHourlyStat(ctx context.Context, bytes i
 		INSERT INTO import_hourly_stats (hour, bytes_downloaded, updated_at)
 		VALUES (?, ?, datetime('now'))
 		ON CONFLICT(hour) DO UPDATE SET
-		bytes_downloaded = bytes_downloaded + excluded.bytes_downloaded,
+		bytes_downloaded = import_hourly_stats.bytes_downloaded + excluded.bytes_downloaded,
 		updated_at = datetime('now')
 	`
 

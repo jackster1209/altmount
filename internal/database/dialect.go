@@ -4,9 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 )
+
+// datetimeOffsetRe matches SQLite relative-time expressions of the form
+// datetime('now', '-24 hours') / datetime('now', '+30 minutes') so q() can
+// rewrite them to PostgreSQL interval arithmetic. This covers dialect-blind
+// call sites — package-level helpers that hold no dialectHelper to branch on
+// (e.g. getIndexerHealthStats). Repository methods that already branch emit
+// NOW() ± INTERVAL directly and never produce this form on the Postgres path.
+var datetimeOffsetRe = regexp.MustCompile(`datetime\('now',\s*'([+-]?\d+)\s+(\w+)'\)`)
 
 // pgQueryCache memoizes the PostgreSQL rewrite of each (static) query string.
 // Query strings are compile-time literals, so the rewrite is deterministic and
@@ -93,7 +102,8 @@ func (h dialectHelper) q(query string) string {
 	if cached, ok := pgQueryCache.Load(query); ok {
 		return cached.(string)
 	}
-	rewritten := strings.ReplaceAll(query, "datetime('now')", "NOW()")
+	rewritten := datetimeOffsetRe.ReplaceAllString(query, "(NOW() + INTERVAL '$1 $2')")
+	rewritten = strings.ReplaceAll(rewritten, "datetime('now')", "NOW()")
 	rewritten = strings.ReplaceAll(rewritten, "date('now')", "CURRENT_DATE")
 	rewritten = rewritePostgresPlaceholders(rewritten)
 	pgQueryCache.Store(query, rewritten)
