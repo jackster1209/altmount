@@ -131,4 +131,26 @@ windows-resources:
 	cd cmd/altmount && goversioninfo -platform-specific versioninfo.json
 
 .PHONY: build
-build: build-cli
+build: build-cli# --- Append to the existing Makefile -------------------------------------
+
+# Run the dialect-parity suite against SQLite (default, no services needed).
+.PHONY: test-parity
+test-parity:
+	ALTMOUNT_TEST_DB=sqlite $(GO) test -v -count=1 -run 'TestParity' ./internal/database/...
+
+# Run the dialect-parity suite against a local throwaway Postgres in Docker.
+# Spins it up, waits for health, runs, and tears it down.
+.PHONY: test-parity-pg
+test-parity-pg:
+	@docker rm -f altmount-pg-test >/dev/null 2>&1 || true
+	docker run -d --name altmount-pg-test \
+		-e POSTGRES_USER=altmount -e POSTGRES_PASSWORD=altmount -e POSTGRES_DB=altmount_test \
+		-p 5432:5432 postgres:16 >/dev/null
+	@echo "waiting for postgres..."; \
+	for i in $$(seq 1 20); do \
+		docker exec altmount-pg-test pg_isready -U altmount >/dev/null 2>&1 && break; sleep 1; \
+	done
+	-ALTMOUNT_TEST_DB=postgres \
+	 ALTMOUNT_TEST_PG_DSN='postgres://altmount:altmount@localhost:5432/altmount_test?sslmode=disable' \
+	 $(GO) test -v -count=1 -run 'TestParity' ./internal/database/...
+	@docker rm -f altmount-pg-test >/dev/null 2>&1 || true

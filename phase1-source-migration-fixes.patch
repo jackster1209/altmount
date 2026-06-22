@@ -1,0 +1,52 @@
+diff --git a/internal/database/migrations/postgres/001_initial_schema.sql b/internal/database/migrations/postgres/001_initial_schema.sql
+index ecb4d94..93dc305 100644
+--- a/internal/database/migrations/postgres/001_initial_schema.sql
++++ b/internal/database/migrations/postgres/001_initial_schema.sql
+@@ -105,7 +105,7 @@ CREATE TABLE media_files (
+     instance_type TEXT NOT NULL CHECK(instance_type IN ('radarr', 'sonarr')),
+     external_id INTEGER NOT NULL,
+     file_path TEXT NOT NULL,
+-    file_size INTEGER,
++    file_size BIGINT,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+ );
+diff --git a/internal/database/migrations/postgres/010_add_nzbdav_id_index.sql b/internal/database/migrations/postgres/010_add_nzbdav_id_index.sql
+index 3e335cc..8675ba9 100644
+--- a/internal/database/migrations/postgres/010_add_nzbdav_id_index.sql
++++ b/internal/database/migrations/postgres/010_add_nzbdav_id_index.sql
+@@ -1,7 +1,7 @@
+ -- +goose Up
+ -- +goose StatementBegin
+ 
+-CREATE INDEX IF NOT EXISTS idx_import_queue_nzbdav_id ON import_queue((metadata::jsonb)->>'nzbdav_id');
++CREATE INDEX IF NOT EXISTS idx_import_queue_nzbdav_id ON import_queue (((metadata::jsonb)->>'nzbdav_id'));
+ 
+ -- +goose StatementEnd
+ 
+diff --git a/internal/database/migrations/postgres/016_add_import_hourly_stats.sql b/internal/database/migrations/postgres/016_add_import_hourly_stats.sql
+index 3dd2483..0033a2c 100644
+--- a/internal/database/migrations/postgres/016_add_import_hourly_stats.sql
++++ b/internal/database/migrations/postgres/016_add_import_hourly_stats.sql
+@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS import_hourly_stats (
+     hour TIMESTAMPTZ PRIMARY KEY,
+     completed_count INTEGER DEFAULT 0,
+     failed_count INTEGER DEFAULT 0,
+-    bytes_downloaded INTEGER DEFAULT 0,
++    bytes_downloaded BIGINT DEFAULT 0,
+     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+ );
+ 
+diff --git a/internal/database/migrations/postgres/027_add_metadata_to_file_health.sql b/internal/database/migrations/postgres/027_add_metadata_to_file_health.sql
+index f25cbe8..d515748 100644
+--- a/internal/database/migrations/postgres/027_add_metadata_to_file_health.sql
++++ b/internal/database/migrations/postgres/027_add_metadata_to_file_health.sql
+@@ -3,7 +3,7 @@
+ DO $$
+ BEGIN
+     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='file_health' AND column_name='metadata') THEN
+-        ALTER TABLE file_health ADD COLUMN metadata JSONB DEFAULT NULL;
++        ALTER TABLE file_health ADD COLUMN metadata TEXT DEFAULT NULL;
+     END IF;
+ END $$;
+ -- +goose StatementEnd
