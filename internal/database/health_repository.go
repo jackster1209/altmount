@@ -57,13 +57,13 @@ func (r *HealthRepository) UpdateFileHealth(ctx context.Context, filePath string
 		status = excluded.status,
 		last_checked = datetime('now'),
 		last_error = excluded.last_error,
-		source_nzb_path = COALESCE(excluded.source_nzb_path, source_nzb_path),
+		source_nzb_path = COALESCE(excluded.source_nzb_path, file_health.source_nzb_path),
 		error_details = excluded.error_details,
-		retry_count = CASE WHEN ? THEN max_retries - 1 ELSE retry_count END,
+		retry_count = CASE WHEN ? THEN file_health.max_retries - 1 ELSE file_health.retry_count END,
 		max_retries = excluded.max_retries,
 		updated_at = datetime('now'),
 		scheduled_check_at = datetime('now'),
-		priority = CASE WHEN ? THEN 2 ELSE priority END
+		priority = CASE WHEN ? THEN 2 ELSE file_health.priority END
 	`
 
 	_, err := r.db.ExecContext(ctx, query, filePath, status, errorMessage, sourceNzbPath, errorDetails, noRetry, noRetry, noRetry, noRetry)
@@ -86,13 +86,13 @@ func (r *HealthRepository) UpdateFileHealthScheduled(ctx context.Context, filePa
 		status = excluded.status,
 		last_checked = datetime('now'),
 		last_error = excluded.last_error,
-		source_nzb_path = COALESCE(excluded.source_nzb_path, source_nzb_path),
+		source_nzb_path = COALESCE(excluded.source_nzb_path, file_health.source_nzb_path),
 		error_details = excluded.error_details,
-		retry_count = CASE WHEN ? THEN max_retries - 1 ELSE retry_count END,
+		retry_count = CASE WHEN ? THEN file_health.max_retries - 1 ELSE file_health.retry_count END,
 		max_retries = excluded.max_retries,
 		updated_at = datetime('now'),
 		scheduled_check_at = ?,
-		priority = CASE WHEN ? THEN 2 ELSE priority END
+		priority = CASE WHEN ? THEN 2 ELSE file_health.priority END
 	`
 
 	_, err := r.db.ExecContext(ctx, query, filePath, status, errorMessage, sourceNzbPath, errorDetails, noRetry, scheduledAtStr, noRetry, noRetry, scheduledAtStr, noRetry)
@@ -636,7 +636,7 @@ func (r *HealthRepository) RegisterCorruptedFile(ctx context.Context, filePath s
 		)
 		VALUES (?, ?, 'pending', ?, ?, 1, 2, 0, 3, datetime('now'), datetime('now'), datetime('now'), datetime('now'), 2)
 		ON CONFLICT(file_path) DO UPDATE SET
-			library_path = COALESCE(excluded.library_path, library_path),
+			library_path = COALESCE(excluded.library_path, file_health.library_path),
 			status = 'pending',
 			last_error = excluded.last_error,
 			error_details = excluded.error_details,
@@ -677,18 +677,18 @@ func (r *HealthRepository) AddFileToHealthCheckWithMetadata(ctx context.Context,
 		VALUES (?, ?, ?, datetime('now'), 0, ?, 0, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
 		ON CONFLICT(file_path) DO UPDATE SET
 
-		library_path = COALESCE(excluded.library_path, library_path),
+		library_path = COALESCE(excluded.library_path, file_health.library_path),
 		status = excluded.status,
 		retry_count = 0,
 		last_error = NULL,
 		error_details = NULL,
 		max_retries = excluded.max_retries,
 		max_repair_retries = excluded.max_repair_retries,
-		source_nzb_path = COALESCE(excluded.source_nzb_path, source_nzb_path),
+		source_nzb_path = COALESCE(excluded.source_nzb_path, file_health.source_nzb_path),
 		priority = excluded.priority,
-		release_date = COALESCE(excluded.release_date, release_date),
-		metadata = COALESCE(excluded.metadata, metadata),
-		indexer = COALESCE(excluded.indexer, indexer),
+		release_date = COALESCE(excluded.release_date, file_health.release_date),
+		metadata = COALESCE(excluded.metadata, file_health.metadata),
+		indexer = COALESCE(excluded.indexer, file_health.indexer),
 		updated_at = datetime('now'),
 		scheduled_check_at = datetime('now')
 	`
@@ -763,18 +763,18 @@ func (r *HealthRepository) batchUpsertFileHealthCheck(ctx context.Context, recor
 		INSERT INTO file_health (file_path, library_path, status, last_checked, retry_count, max_retries, repair_retry_count, max_repair_retries, source_nzb_path, priority, release_date, metadata, indexer, created_at, updated_at, scheduled_check_at)
 		VALUES %s
 		ON CONFLICT(file_path) DO UPDATE SET
-			library_path = COALESCE(excluded.library_path, library_path),
+			library_path = COALESCE(excluded.library_path, file_health.library_path),
 			status = excluded.status,
 			retry_count = 0,
 			last_error = NULL,
 			error_details = NULL,
 			max_retries = excluded.max_retries,
 			max_repair_retries = excluded.max_repair_retries,
-			source_nzb_path = COALESCE(excluded.source_nzb_path, source_nzb_path),
+			source_nzb_path = COALESCE(excluded.source_nzb_path, file_health.source_nzb_path),
 			priority = excluded.priority,
-			release_date = COALESCE(excluded.release_date, release_date),
-			metadata = COALESCE(excluded.metadata, metadata),
-			indexer = COALESCE(excluded.indexer, indexer),
+			release_date = COALESCE(excluded.release_date, file_health.release_date),
+			metadata = COALESCE(excluded.metadata, file_health.metadata),
+			indexer = COALESCE(excluded.indexer, file_health.indexer),
 			updated_at = datetime('now'),
 			scheduled_check_at = datetime('now')
 	`, strings.Join(valueStrings, ","))
@@ -1609,18 +1609,18 @@ func (r *HealthRepository) batchInsertAutomaticHealthChecks(ctx context.Context,
 		)
 		VALUES %s
 		ON CONFLICT(file_path) DO UPDATE SET
-			library_path = COALESCE(excluded.library_path, library_path),
+			library_path = COALESCE(excluded.library_path, file_health.library_path),
 			status = CASE 
-				WHEN source_nzb_path != excluded.source_nzb_path OR release_date != excluded.release_date THEN excluded.status 
-				ELSE status 
+				WHEN file_health.source_nzb_path != excluded.source_nzb_path OR file_health.release_date != excluded.release_date THEN excluded.status 
+				ELSE file_health.status 
 			END,
 			scheduled_check_at = CASE 
-				WHEN source_nzb_path != excluded.source_nzb_path OR release_date != excluded.release_date THEN excluded.scheduled_check_at 
-				ELSE scheduled_check_at 
+				WHEN file_health.source_nzb_path != excluded.source_nzb_path OR file_health.release_date != excluded.release_date THEN excluded.scheduled_check_at 
+				ELSE file_health.scheduled_check_at 
 			END,
 			retry_count = CASE 
-				WHEN source_nzb_path != excluded.source_nzb_path OR release_date != excluded.release_date THEN 0 
-				ELSE retry_count 
+				WHEN file_health.source_nzb_path != excluded.source_nzb_path OR file_health.release_date != excluded.release_date THEN 0 
+				ELSE file_health.retry_count 
 			END,
 			source_nzb_path = excluded.source_nzb_path,
 			release_date = excluded.release_date,

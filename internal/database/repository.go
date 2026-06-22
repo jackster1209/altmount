@@ -107,14 +107,14 @@ func (r *Repository) AddToQueue(ctx context.Context, item *ImportQueueItem) erro
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 		ON CONFLICT(nzb_path) DO UPDATE SET
 		download_id = COALESCE(excluded.download_id, import_queue.download_id),
-		priority = CASE WHEN excluded.priority < priority THEN excluded.priority ELSE priority END,
+		priority = CASE WHEN excluded.priority < import_queue.priority THEN excluded.priority ELSE import_queue.priority END,
 		category = excluded.category,
 		batch_id = excluded.batch_id,
 		metadata = excluded.metadata,
 		file_size = excluded.file_size,
 		target_path = excluded.target_path,
 		updated_at = datetime('now')
-		WHERE status NOT IN ('processing', 'completed')
+		WHERE import_queue.status NOT IN ('processing', 'completed')
 	`
 
 	args := []any{item.DownloadID, item.NzbPath, item.RelativePath, item.Category, item.Priority, item.Status,
@@ -209,14 +209,14 @@ func (r *Repository) AddBatchToQueue(ctx context.Context, items []*ImportQueueIt
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 			ON CONFLICT(nzb_path) DO UPDATE SET
 			download_id = COALESCE(excluded.download_id, import_queue.download_id),
-			priority = CASE WHEN excluded.priority < priority THEN excluded.priority ELSE priority END,
+			priority = CASE WHEN excluded.priority < import_queue.priority THEN excluded.priority ELSE import_queue.priority END,
 			category = excluded.category,
 			batch_id = excluded.batch_id,
 			metadata = excluded.metadata,
 			file_size = excluded.file_size,
 			target_path = excluded.target_path,
 			updated_at = datetime('now')
-			WHERE status NOT IN ('processing', 'completed')
+			WHERE import_queue.status NOT IN ('processing', 'completed')
 		`
 
 		now := time.Now()
