@@ -810,6 +810,30 @@ func (r *HealthRepository) ListHealthItems(ctx context.Context, statusFilter *He
 		}
 	}
 
+	// Build the WHERE clause dynamically so an unset optional filter never emits
+	// a bare parameter inside `? IS NULL` — PostgreSQL cannot infer that
+	// parameter's type and fails with 42P18. Omitting the condition entirely is
+	// equivalent and works identically on both engines.
+	var conds []string
+	var args []any
+	if statusFilter != nil {
+		conds = append(conds, "status = ?")
+		args = append(args, string(*statusFilter))
+	}
+	if sinceFilter != nil {
+		conds = append(conds, "created_at >= ?")
+		args = append(args, sinceFilter.Format("2006-01-02 15:04:05"))
+	}
+	if search != "" {
+		searchPattern := "%" + search + "%"
+		conds = append(conds, "(file_path LIKE ? OR (source_nzb_path IS NOT NULL AND source_nzb_path LIKE ?))")
+		args = append(args, searchPattern, searchPattern)
+	}
+	whereClause := ""
+	if len(conds) > 0 {
+		whereClause = "WHERE " + strings.Join(conds, " AND ")
+	}
+
 	query := fmt.Sprintf(`
 		SELECT id, file_path, status, last_checked, last_error, retry_count, max_retries,
 		       repair_retry_count, max_repair_retries, source_nzb_path,
@@ -817,33 +841,12 @@ func (r *HealthRepository) ListHealthItems(ctx context.Context, statusFilter *He
 			   library_path, streaming_failure_count, is_masked
 		, metadata, indexer
 		FROM file_health
-		WHERE (? IS NULL OR status = ?)
-		  AND (? IS NULL OR created_at >= ?)
-		  AND (? = '' OR file_path LIKE ? OR (source_nzb_path IS NOT NULL AND source_nzb_path LIKE ?))
+		%s
 		ORDER BY %s
 		LIMIT ? OFFSET ?
-	`, orderClause)
+	`, whereClause, orderClause)
 
-	// Prepare arguments for the query
-	var statusParam any = nil
-	if statusFilter != nil {
-		statusParam = string(*statusFilter)
-	}
-
-	var sinceParam any = nil
-	if sinceFilter != nil {
-		sinceParam = sinceFilter.Format("2006-01-02 15:04:05")
-	}
-
-	// Prepare search parameter with wildcards
-	searchPattern := "%" + search + "%"
-
-	args := []any{
-		statusParam, statusParam, // status filter (checked twice in WHERE clause)
-		sinceParam, sinceParam, // since filter (checked twice in WHERE clause)
-		search, searchPattern, searchPattern, // search filter (file_path and source_nzb_path)
-		limit, offset,
-	}
+	args = append(args, limit, offset)
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -878,33 +881,31 @@ func (r *HealthRepository) ListHealthItems(ctx context.Context, statusFilter *He
 
 // CountHealthItems returns the total count of health records with optional filtering
 func (r *HealthRepository) CountHealthItems(ctx context.Context, statusFilter *HealthStatus, sinceFilter *time.Time, search string) (int, error) {
-	query := `
-		SELECT COUNT(*) 
-		FROM file_health
-		WHERE (? IS NULL OR status = ?)
-		  AND (? IS NULL OR created_at >= ?)
-		  AND (? = '' OR file_path LIKE ? OR (source_nzb_path IS NOT NULL AND source_nzb_path LIKE ?))
-	`
-
-	// Prepare arguments for the query
-	var statusParam any = nil
+	var conds []string
+	var args []any
 	if statusFilter != nil {
-		statusParam = string(*statusFilter)
+		conds = append(conds, "status = ?")
+		args = append(args, string(*statusFilter))
 	}
-
-	var sinceParam any = nil
 	if sinceFilter != nil {
-		sinceParam = sinceFilter.Format("2006-01-02 15:04:05")
+		conds = append(conds, "created_at >= ?")
+		args = append(args, sinceFilter.Format("2006-01-02 15:04:05"))
+	}
+	if search != "" {
+		searchPattern := "%" + search + "%"
+		conds = append(conds, "(file_path LIKE ? OR (source_nzb_path IS NOT NULL AND source_nzb_path LIKE ?))")
+		args = append(args, searchPattern, searchPattern)
+	}
+	whereClause := ""
+	if len(conds) > 0 {
+		whereClause = "WHERE " + strings.Join(conds, " AND ")
 	}
 
-	// Prepare search parameter with wildcards
-	searchPattern := "%" + search + "%"
-
-	args := []any{
-		statusParam, statusParam, // status filter (checked twice in WHERE clause)
-		sinceParam, sinceParam, // since filter (checked twice in WHERE clause)
-		search, searchPattern, searchPattern, // search filter (file_path and source_nzb_path)
-	}
+	query := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM file_health
+		%s
+	`, whereClause)
 
 	var count int
 	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
@@ -1123,22 +1124,13 @@ func (r *HealthRepository) ResetAllHealthChecks(ctx context.Context) (int, error
 
 // DeleteHealthRecordsByDate deletes health records older than the specified date with optional status filter
 func (r *HealthRepository) DeleteHealthRecordsByDate(ctx context.Context, olderThan time.Time, statusFilter *HealthStatus) (int, error) {
-	query := `
-		DELETE FROM file_health
-		WHERE created_at < ?
-		  AND (? IS NULL OR status = ?)
-	`
-
-	// Prepare arguments for the query
-	var statusParam any = nil
+	conds := []string{"created_at < ?"}
+	args := []any{olderThan.Format("2006-01-02 15:04:05")}
 	if statusFilter != nil {
-		statusParam = string(*statusFilter)
+		conds = append(conds, "status = ?")
+		args = append(args, string(*statusFilter))
 	}
-
-	args := []any{
-		olderThan.Format("2006-01-02 15:04:05"),
-		statusParam, statusParam, // status filter (checked twice in WHERE clause)
-	}
+	query := "DELETE FROM file_health WHERE " + strings.Join(conds, " AND ")
 
 	result, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {

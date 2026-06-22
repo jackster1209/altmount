@@ -45,10 +45,6 @@ func TestParity_Smoke(t *testing.T) {
 // Writing the same provider twice must accumulate, and the read-back window must
 // return that sum. Identical expectation on both engines.
 func TestParity_ProviderHourlyUpsertAndWindow(t *testing.T) {
-	if testdb.Engine() == "postgres" {
-		t.Skip("unskip after Phase 3 (date helpers) and Phase 4 (upsert qualification) land")
-	}
-
 	db := testdb.New(t)
 	ctx := context.Background()
 	repo := database.NewRepository(db.Connection(), db.Dialect())
@@ -67,5 +63,44 @@ func TestParity_ProviderHourlyUpsertAndWindow(t *testing.T) {
 	}
 	if got := stats[provider]; got != 3_500 {
 		t.Fatalf("provider hourly bytes on %s = %d, want 3500", testdb.Engine(), got)
+	}
+}
+
+// TestParity_IndexerHealthStats covers the getIndexerHealthStats query, whose
+// `datetime('now','-24 hours')` reaches Postgres through q() (the package-level
+// function holds no dialectHelper to branch on). The query must parse and run on
+// both engines even with no rows — on Postgres pre-fix it failed at plan time
+// with "function datetime(unknown, unknown) does not exist".
+func TestParity_IndexerHealthStats(t *testing.T) {
+	db := testdb.New(t)
+	ctx := context.Background()
+	repo := database.NewRepository(db.Connection(), db.Dialect())
+
+	if _, err := repo.GetIndexerHealthStats(ctx); err != nil {
+		t.Fatalf("GetIndexerHealthStats on %s: %v", testdb.Engine(), err)
+	}
+}
+
+// TestParity_ListHealthRecords covers the file-health listing and count queries,
+// whose optional status/since filters previously emitted `? IS NULL` — an
+// untyped bare parameter that Postgres rejects with 42P18 ("could not determine
+// data type of parameter"). Must run with and without filters on both engines.
+func TestParity_ListHealthRecords(t *testing.T) {
+	db := testdb.New(t)
+	ctx := context.Background()
+	repo := database.NewHealthRepository(db.Connection(), db.Dialect())
+
+	// No filters — the path that previously failed on Postgres.
+	if _, err := repo.ListHealthItems(ctx, nil, 50, 0, nil, "", "", ""); err != nil {
+		t.Fatalf("ListHealthItems(no filters) on %s: %v", testdb.Engine(), err)
+	}
+	if _, err := repo.CountHealthItems(ctx, nil, nil, ""); err != nil {
+		t.Fatalf("CountHealthItems(no filters) on %s: %v", testdb.Engine(), err)
+	}
+
+	// With a status filter and a search term (the typed paths).
+	status := database.HealthStatusPending
+	if _, err := repo.ListHealthItems(ctx, &status, 50, 0, nil, "movie", "created_at", "desc"); err != nil {
+		t.Fatalf("ListHealthItems(status+search) on %s: %v", testdb.Engine(), err)
 	}
 }
