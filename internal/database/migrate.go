@@ -293,6 +293,15 @@ func columnTypes(ctx context.Context, db *sql.DB, d Dialect, table string) (map[
 // "id" serial sequence are skipped.
 func resetPostgresSequences(ctx context.Context, dst *sql.DB, progress ProgressFunc) error {
 	for _, table := range appCopyOrder {
+		var hasID bool
+		if err := dst.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name=$1 AND column_name='id')",
+			table).Scan(&hasID); err != nil {
+			return fmt.Errorf("check id column for %s: %w", table, err)
+		}
+		if !hasID {
+			continue
+		}
 		var seq sql.NullString
 		if err := dst.QueryRowContext(ctx, "SELECT pg_get_serial_sequence($1, 'id')", table).Scan(&seq); err != nil {
 			return fmt.Errorf("resolve sequence for %s: %w", table, err)
