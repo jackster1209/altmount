@@ -16,9 +16,8 @@ const (
 	// BootModeNormal means the configured backend matches the last active backend
 	// (or this is a fresh install with no data to migrate). Normal startup proceeds.
 	BootModeNormal BootMode = iota
-	// BootModeMaintenance means the configured backend differs from the last active
-	// backend, or an existing populated SQLite file was found when config targets
-	// postgres. The server must boot into maintenance mode and complete the data
+	// BootModeMaintenance means the marker records a different backend than what is
+	// configured. The server must boot into maintenance mode and complete the data
 	// migration before normal operation can resume.
 	BootModeMaintenance
 )
@@ -37,10 +36,11 @@ type BootDecision struct {
 //
 //  1. Marker present and backend matches config → normal boot.
 //  2. Marker present and backend mismatches config → maintenance (migration needed).
-//  3. Marker absent, config targets postgres, existing SQLite has rows → maintenance
-//     (existing user upgrading to this feature for the first time).
-//  4. All other cases → normal boot (fresh install or same backend, no marker yet).
-func DetectBootMode(configType, sqlitePath, markerPath string) (BootDecision, error) {
+//  3. No marker → normal boot. The marker is written by serve.go after every
+//     successful boot, so the next restart will detect any backend change correctly.
+//     This covers first-run and first-run-with-new-image scenarios without
+//     requiring user intervention.
+func DetectBootMode(configType, _ /* sqlitePath */, markerPath string) (BootDecision, error) {
 	if configType == "" {
 		configType = "sqlite"
 	}
@@ -66,17 +66,8 @@ func DetectBootMode(configType, sqlitePath, markerPath string) (BootDecision, er
 		}, nil
 	}
 
-	// No marker yet. Check for the "existing SQLite user upgrading to postgres" case.
-	if configType == "postgres" && hasSQLiteData(sqlitePath) {
-		return BootDecision{
-			Mode:       BootModeMaintenance,
-			SourceType: "sqlite",
-			TargetType: "postgres",
-			Reason:     "existing SQLite data detected; migration to postgres required",
-		}, nil
-	}
-
-	// Fresh install or marker-less SQLite-to-SQLite: normal boot.
+	// No marker: first run or first run with this image version. Boot normally
+	// and let serve.go write the marker after successful initialization.
 	return BootDecision{
 		Mode:       BootModeNormal,
 		TargetType: configType,
@@ -117,39 +108,3 @@ func PingDB(ctx context.Context, cfg Config) error {
 	}
 }
 
-// hasSQLiteData returns true when the SQLite file at path exists and contains at
-// least one user-data row across the key application tables. Checking a spread
-// of tables is necessary because import_queue can be empty for an active user
-// whose imports have all completed, while their real library lives in media_files,
-// file_health, and import_history. Each table is queried independently so that a
-// missing table (pre-migration database) is treated as zero rows rather than an
-// error. A missing file, unreadable file, or a file with no rows in any checked
-// table returns false (treated as empty / fresh install).
-func hasSQLiteData(path string) bool {
-	if path == "" {
-		return false
-	}
-	if _, err := os.Stat(path); err != nil {
-		return false
-	}
-	// Open read-only — never create the file.
-	conn, err := sql.Open("sqlite3", path+"?mode=ro")
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-
-	// Check the tables most likely to contain durable user data. import_queue
-	// items are deleted after processing, so it alone is not a reliable signal.
-	tables := []string{"import_queue", "media_files", "file_health", "import_history"}
-	for _, table := range tables {
-		var count int64
-		if err := conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
-			continue // table may not exist yet on a pre-migration database
-		}
-		if count > 0 {
-			return true
-		}
-	}
-	return false
-}
