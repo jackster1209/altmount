@@ -61,7 +61,30 @@ func (p ProgressFunc) emit(format string, args ...any) {
 //
 // The caller is responsible for ensuring the source is quiescent (no concurrent
 // writers) for the duration of the copy so the snapshot is consistent.
+// prepareSQLiteTarget removes an existing SQLite database file and any
+// accompanying WAL/SHM files so the migration always writes into a clean
+// database. Leftover WAL or SHM files from a previous run can corrupt the
+// freshly migrated data if SQLite replays them on first open.
+func prepareSQLiteTarget(path string, progress ProgressFunc) error {
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", p, err)
+		}
+	}
+	progress.emit("  removed existing SQLite database (and WAL/SHM if present): %s", path)
+	return nil
+}
+
 func MigrateData(ctx context.Context, src, dst Config, progress ProgressFunc) (*MigrateReport, error) {
+	// For a SQLite target, delete the existing file plus any WAL/SHM files
+	// before opening. NewDB will then create a fresh database and run
+	// migrations, giving us a clean slate without needing to DELETE rows.
+	if dst.Type == "sqlite" {
+		if err := prepareSQLiteTarget(dst.DatabasePath, progress); err != nil {
+			return nil, fmt.Errorf("prepare sqlite target: %w", err)
+		}
+	}
+
 	srcDB, err := NewDB(src)
 	if err != nil {
 		return nil, fmt.Errorf("open source database: %w", err)
@@ -96,11 +119,15 @@ func MigrateData(ctx context.Context, src, dst Config, progress ProgressFunc) (*
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Wipe existing application rows, children before parents.
-	for i := len(appCopyOrder) - 1; i >= 0; i-- {
-		table := appCopyOrder[i]
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			return nil, fmt.Errorf("clear target table %s: %w", table, err)
+	// Wipe existing application rows for a Postgres target (children before
+	// parents for FK safety). SQLite targets are handled above by deleting the
+	// file entirely, so no DELETE pass is needed here.
+	if dstDialect == DialectPostgres {
+		for i := len(appCopyOrder) - 1; i >= 0; i-- {
+			table := appCopyOrder[i]
+			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+				return nil, fmt.Errorf("clear target table %s: %w", table, err)
+			}
 		}
 	}
 
