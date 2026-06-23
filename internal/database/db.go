@@ -8,7 +8,8 @@ import (
 	"log/slog"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/pressly/goose/v3"
 )
@@ -97,10 +98,17 @@ func newSQLiteDB(config Config) (*DB, error) {
 
 // newPostgresDB opens a PostgreSQL database and runs migrations.
 func newPostgresDB(config Config) (*DB, error) {
-	conn, err := sql.Open("pgx", config.DSN)
+	// Force UTC on every session so that bare string timestamps (no timezone
+	// indicator) are interpreted as UTC on both write and comparison. Without
+	// this, a server whose default timezone is not UTC would shift every
+	// scheduled_check_at stored as "YYYY-MM-DD HH:MM:SS", breaking all
+	// scheduler "scheduled_check_at <= NOW()" comparisons.
+	connConfig, err := pgx.ParseConfig(config.DSN)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open postgres database: %w", err)
+		return nil, fmt.Errorf("failed to parse postgres DSN: %w", err)
 	}
+	connConfig.RuntimeParams["TimeZone"] = "UTC"
+	conn := stdlib.OpenDB(*connConfig)
 
 	conn.SetMaxOpenConns(25)
 	conn.SetMaxIdleConns(5)
