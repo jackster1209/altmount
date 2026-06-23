@@ -298,7 +298,7 @@ func (r *Repository) IncrementDailyStat(ctx context.Context, statType string) er
 		INSERT INTO import_daily_stats (day, %s, updated_at)
 		VALUES (date('now'), 1, datetime('now'))
 		ON CONFLICT(day) DO UPDATE SET
-		%s = %s + 1,
+		%s = import_daily_stats.%s + 1,
 		updated_at = datetime('now')
 	`, column, column, column)
 
@@ -1585,7 +1585,7 @@ func (r *Repository) IncrementHourlyStat(ctx context.Context, statType string) e
 		INSERT INTO import_hourly_stats (hour, %s, updated_at)
 		VALUES (?, 1, datetime('now'))
 		ON CONFLICT(hour) DO UPDATE SET
-		%s = %s + 1,
+		%s = import_hourly_stats.%s + 1,
 		updated_at = datetime('now')
 	`, column, column, column)
 
