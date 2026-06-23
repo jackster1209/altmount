@@ -20,6 +20,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrsConfigSection } from "../components/config/ArrsConfigSection";
 import { AuthConfigSection } from "../components/config/AuthConfigSection";
+import { DatabaseConfigSection } from "../components/config/DatabaseConfigSection";
 import { ComingSoonSection } from "../components/config/ComingSoonSection";
 import { HealthConfigSection } from "../components/config/HealthConfigSection";
 import { MetadataConfigSection } from "../components/config/MetadataConfigSection";
@@ -49,6 +50,7 @@ import type {
 	ArrsConfig,
 	AuthConfig,
 	ConfigSection,
+	DatabaseConfig,
 	HealthConfig,
 	ImportConfig,
 	LogFormData,
@@ -100,7 +102,7 @@ const SECTION_GROUPS = [
 	},
 	{
 		title: "System",
-		sections: ["auth", "network", "system"],
+		sections: ["auth", "network", "database", "system"],
 	},
 ];
 
@@ -277,6 +279,12 @@ export function ConfigurationPage() {
 					section: "nzblnk",
 					config: { nzblnk: data as unknown as NzblnkConfig },
 				});
+			} else if (section === "database") {
+				await updateConfigSection.mutateAsync({
+					section: "database",
+					config: { database: data as unknown as DatabaseConfig },
+				});
+				addRestartRequiredConfig("Database Backend");
 			} else if (section === "network") {
 				await updateConfigSection.mutateAsync({
 					section: "network",
@@ -564,6 +572,13 @@ export function ConfigurationPage() {
 										isUpdating={updateConfigSection.isPending}
 									/>
 								)}
+								{activeSection === "database" && (
+									<DatabaseConfigSection
+										config={config}
+										onUpdate={handleConfigUpdate}
+										isUpdating={updateConfigSection.isPending}
+									/>
+								)}
 								{activeSection === "network" && (
 									<NetworkConfigSection
 										config={config}
@@ -574,6 +589,7 @@ export function ConfigurationPage() {
 								{![
 									"webdav",
 									"auth",
+									"database",
 									"import",
 									"metadata",
 									"streaming",
