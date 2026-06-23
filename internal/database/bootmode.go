@@ -75,6 +75,54 @@ func DetectBootMode(configType, _ /* sqlitePath */, markerPath string) (BootDeci
 	}, nil
 }
 
+// DBConnectionStatus is the outcome of a user-initiated test-connection request.
+type DBConnectionStatus struct {
+	Status  string // "ok" | "new" | "error"
+	Message string
+}
+
+// TestDBConnection probes a database endpoint and returns user-facing feedback.
+// Unlike PingDB (used for startup validation), this function distinguishes three
+// SQLite states: existing file → "ok", valid directory but no file → "new" (will
+// be created on restart), inaccessible path → "error". Postgres returns only
+// "ok" or "error".
+func TestDBConnection(ctx context.Context, cfg Config) DBConnectionStatus {
+	switch cfg.Type {
+	case "postgres":
+		if cfg.DSN == "" {
+			return DBConnectionStatus{Status: "error", Message: "postgres DSN is required"}
+		}
+		conn, err := sql.Open("pgx", cfg.DSN)
+		if err != nil {
+			return DBConnectionStatus{Status: "error", Message: "open connection: " + err.Error()}
+		}
+		defer conn.Close()
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := conn.PingContext(pingCtx); err != nil {
+			return DBConnectionStatus{Status: "error", Message: "ping failed: " + err.Error()}
+		}
+		return DBConnectionStatus{Status: "ok", Message: "connection successful"}
+	default: // sqlite
+		if cfg.DatabasePath == "" {
+			return DBConnectionStatus{Status: "error", Message: "database path is required"}
+		}
+		dir := filepath.Dir(cfg.DatabasePath)
+		if _, err := os.Stat(dir); err != nil {
+			return DBConnectionStatus{Status: "error", Message: "directory not accessible: " + dir}
+		}
+		if _, err := os.Stat(cfg.DatabasePath); os.IsNotExist(err) {
+			return DBConnectionStatus{
+				Status:  "new",
+				Message: "no database found at this path — a new one will be created on restart",
+			}
+		} else if err != nil {
+			return DBConnectionStatus{Status: "error", Message: "cannot access file: " + err.Error()}
+		}
+		return DBConnectionStatus{Status: "ok", Message: "database file found"}
+	}
+}
+
 // PingDB validates that the database endpoint described by cfg is reachable
 // without running schema migrations. For SQLite it checks that the parent
 // directory exists and is accessible; for Postgres it opens the connection and

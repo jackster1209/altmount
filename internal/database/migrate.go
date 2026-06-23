@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // appCopyOrder lists the application tables in the order rows must be copied so
@@ -326,6 +329,117 @@ func verifyCounts(ctx context.Context, src, dst *sql.DB, report *MigrateReport, 
 	}
 	progress.emit("Verified row counts for %d tables", len(appCopyOrder))
 	return nil
+}
+
+// BackupToSQL writes an INSERT-statement dump of all application tables from cfg
+// to a timestamped .sql file inside backupDir, creating the directory if needed.
+// Call before wiping the target database so data is recoverable. Returns the
+// path of the file written.
+func BackupToSQL(ctx context.Context, cfg Config, backupDir string, progress ProgressFunc) (string, error) {
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+
+	db, err := NewDB(cfg)
+	if err != nil {
+		return "", fmt.Errorf("open database for backup: %w", err)
+	}
+	defer db.Close()
+
+	ts := time.Now().UTC().Format("20060102-150405")
+	filename := fmt.Sprintf("altmount-%s-migration-%s.sql", cfg.Type, ts)
+	filePath := filepath.Join(backupDir, filename)
+
+	f, err := os.Create(filePath)
+	if err != nil {
+		return "", fmt.Errorf("create backup file: %w", err)
+	}
+	defer f.Close()
+
+	conn := db.Connection()
+	dialect := db.Dialect()
+
+	fmt.Fprintf(f, "-- AltMount %s backup before migration — %s\n\n", cfg.Type, ts)
+
+	for _, table := range appCopyOrder {
+		var count int64
+		if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
+			continue
+		}
+		if count == 0 {
+			continue
+		}
+
+		_, cols, err := columnTypes(ctx, conn, dialect, table)
+		if err != nil {
+			progress.emit("  skipping backup of %s: %v", table, err)
+			continue
+		}
+
+		colList := strings.Join(cols, ", ")
+		rows, err := conn.QueryContext(ctx, "SELECT "+colList+" FROM "+table)
+		if err != nil {
+			return "", fmt.Errorf("read %s for backup: %w", table, err)
+		}
+
+		fmt.Fprintf(f, "-- %s (%d rows)\n", table, count)
+		var written int64
+		for rows.Next() {
+			vals := make([]any, len(cols))
+			ptrs := make([]any, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				rows.Close()
+				return "", fmt.Errorf("scan row from %s: %w", table, err)
+			}
+			fmt.Fprintf(f, "INSERT INTO %s (%s) VALUES (", table, colList)
+			for i, v := range vals {
+				if i > 0 {
+					fmt.Fprint(f, ", ")
+				}
+				fmt.Fprint(f, sqlLiteral(v))
+			}
+			fmt.Fprintln(f, ");")
+			written++
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return "", fmt.Errorf("iterate %s for backup: %w", table, err)
+		}
+		fmt.Fprintln(f)
+		progress.emit("  backed up %s: %d rows", table, written)
+	}
+
+	return filePath, nil
+}
+
+// sqlLiteral formats a scanned database value as a SQL literal suitable for
+// embedding in an INSERT statement.
+func sqlLiteral(v any) string {
+	if v == nil {
+		return "NULL"
+	}
+	switch val := v.(type) {
+	case bool:
+		if val {
+			return "TRUE"
+		}
+		return "FALSE"
+	case int64:
+		return fmt.Sprintf("%d", val)
+	case float64:
+		return fmt.Sprintf("%g", val)
+	case string:
+		return "'" + strings.ReplaceAll(val, "'", "''") + "'"
+	case []byte:
+		return "'" + strings.ReplaceAll(string(val), "'", "''") + "'"
+	case time.Time:
+		return "'" + val.UTC().Format(time.RFC3339Nano) + "'"
+	default:
+		return fmt.Sprintf("'%v'", v)
+	}
 }
 
 // RowCounts opens the given backend, sums application-table row counts, and

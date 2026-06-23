@@ -12,6 +12,7 @@ interface MaintenanceStatus {
 	status: "ready" | "running" | "done" | "error";
 	progress: string[];
 	error: string;
+	backup_failed?: boolean;
 }
 
 async function fetchStatus(): Promise<MaintenanceStatus | null> {
@@ -24,10 +25,12 @@ async function fetchStatus(): Promise<MaintenanceStatus | null> {
 	}
 }
 
-async function startMigration(): Promise<string | null> {
+async function startMigration(skipBackup = false): Promise<string | null> {
 	try {
 		const res = await fetch("/api/maintenance/run", {
 			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ skip_backup: skipBackup }),
 			cache: "no-store",
 		});
 		const body = await res.json().catch(() => ({}));
@@ -79,9 +82,15 @@ export function MaintenancePage() {
 		setIsStarting(true);
 		setStartError(null);
 		const err = await startMigration();
-		if (err) {
-			setStartError(err);
-		}
+		if (err) setStartError(err);
+		setIsStarting(false);
+	};
+
+	const handleStartWithoutBackup = async () => {
+		setIsStarting(true);
+		setStartError(null);
+		const err = await startMigration(true);
+		if (err) setStartError(err);
 		setIsStarting(false);
 	};
 
@@ -228,9 +237,34 @@ export function MaintenancePage() {
 							)}
 
 							{isError && status.error && (
-								<div className="alert alert-error mt-3 py-2 text-sm">
-									<AlertTriangle className="h-4 w-4 shrink-0" />
-									<span>{status.error}</span>
+								<div className="mt-3 space-y-3">
+									<div className="alert alert-error py-2 text-sm">
+										<AlertTriangle className="h-4 w-4 shrink-0" />
+										<span className="whitespace-pre-line">{status.error}</span>
+									</div>
+
+									{status.backup_failed && (
+										<div className="rounded-xl border border-warning/30 bg-warning/5 p-4">
+											<p className="mb-3 text-sm text-base-content/70">
+												If you have resolved the backup issue or accept the risk
+												of proceeding without a backup, you can skip the backup
+												step and continue the migration.
+											</p>
+											<button
+												type="button"
+												className="btn btn-warning btn-sm"
+												onClick={handleStartWithoutBackup}
+												disabled={isStarting}
+											>
+												{isStarting ? (
+													<span className="loading loading-spinner loading-sm" />
+												) : (
+													<AlertTriangle className="h-4 w-4" />
+												)}
+												{isStarting ? "Starting…" : "Proceed Without Backup"}
+											</button>
+										</div>
+									)}
 								</div>
 							)}
 

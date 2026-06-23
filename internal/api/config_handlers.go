@@ -1095,9 +1095,10 @@ func (s *Server) getAPIKeyForConfig(c *fiber.Ctx) string {
 	return ""
 }
 
-// handleTestDatabaseConnection validates that the given database endpoint is
-// reachable. For postgres it opens and pings the connection; for sqlite it
-// checks that the parent directory is accessible. Migrations are never run.
+// handleTestDatabaseConnection probes a database endpoint and returns a
+// user-facing status. Three outcomes are possible for SQLite: "ok" (file
+// exists), "new" (directory exists but no file — will be created on restart),
+// or an error response. Postgres returns "ok" or an error.
 func (s *Server) handleTestDatabaseConnection(c *fiber.Ctx) error {
 	var req struct {
 		Type string `json:"type"`
@@ -1111,8 +1112,9 @@ func (s *Server) handleTestDatabaseConnection(c *fiber.Ctx) error {
 		return RespondBadRequest(c, "type must be sqlite or postgres", "")
 	}
 	cfg := database.Config{Type: req.Type, DatabasePath: req.Path, DSN: req.DSN}
-	if err := database.PingDB(c.Context(), cfg); err != nil {
-		return RespondBadRequest(c, "connection test failed", err.Error())
+	result := database.TestDBConnection(c.Context(), cfg)
+	if result.Status == "error" {
+		return RespondBadRequest(c, result.Message, "")
 	}
-	return RespondMessage(c, "connection successful")
+	return RespondSuccess(c, fiber.Map{"status": result.Status, "message": result.Message})
 }

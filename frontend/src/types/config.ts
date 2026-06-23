@@ -492,7 +492,6 @@ export interface SABnzbdUpdateRequest {
 export type ConfigSection =
 	| "webdav"
 	| "auth"
-	| "database"
 	| "metadata"
 	| "streaming"
 	| "segment_cache"
@@ -795,12 +794,6 @@ export const CONFIG_SECTIONS: Record<ConfigSection | "system", ConfigSectionInfo
 		title: "NZBLNK",
 		description: "Settings for resolving nzblnk:// links via public NZB indexers",
 		icon: "Link",
-		canEdit: true,
-	},
-	database: {
-		title: "Database",
-		description: "Storage backend configuration. Switch between SQLite and PostgreSQL.",
-		icon: "HardDrive",
 		canEdit: true,
 	},
 	network: {
