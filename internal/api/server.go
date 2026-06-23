@@ -329,6 +329,7 @@ func (s *Server) SetupRoutes(app *fiber.App) {
 	api.Patch("/config/:section", s.handlePatchConfigSection)
 	api.Post("/config/reload", s.handleReloadConfig)
 	api.Post("/config/validate", s.handleValidateConfig)
+	api.Post("/config/database/test-connection", s.handleTestDatabaseConnection)
 
 	// FUSE endpoints
 	api.Post("/fuse/start", s.handleStartFuseMount)

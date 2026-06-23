@@ -18,6 +18,7 @@ import (
 	"github.com/javi11/altmount/internal/arrs"
 	"github.com/javi11/altmount/internal/stremio"
 	"github.com/javi11/altmount/internal/config"
+	"github.com/javi11/altmount/internal/database"
 	"github.com/javi11/altmount/internal/health"
 	"github.com/javi11/altmount/internal/metadata"
 	"github.com/javi11/altmount/internal/nzbfilesystem/segcache"
@@ -65,6 +66,18 @@ func runServe(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Check whether the configured backend has changed since the last boot.
+	// If a migration is needed, hand off to the maintenance server and return.
+	markerPath := database.StatePath(configFile)
+	decision, detErr := database.DetectBootMode(cfg.Database.Type, cfg.Database.Path, markerPath)
+	if detErr != nil {
+		// Non-fatal: log and fall through to a normal boot so a corrupt/unreadable
+		// marker does not permanently lock the server in a bad state.
+		logger.WarnContext(ctx, "Boot mode detection failed; proceeding with normal boot", "err", detErr)
+	} else if decision.Mode == database.BootModeMaintenance {
+		return runMaintenanceBoot(cfg, decision, markerPath)
+	}
+
 	configManager := config.NewManager(cfg, configFile)
 
 	// 3. Initialize core services
@@ -78,6 +91,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 			logger.Error("failed to close database", "err", err)
 		}
 	}()
+
+	// Record the active backend so future restarts can detect a backend switch.
+	schemaVer, _ := database.SchemaVersion(db.Connection(), db.Dialect())
+	activeBackend := cfg.Database.Type
+	if activeBackend == "" {
+		activeBackend = "sqlite"
+	}
+	if writeErr := database.WriteState(markerPath, database.DBState{
+		Backend:       activeBackend,
+		SchemaVersion: schemaVer,
+	}); writeErr != nil {
+		logger.WarnContext(ctx, "Failed to write db state marker (non-fatal)", "err", writeErr)
+	}
 
 	db.StartCheckpointLoop(ctx, 5*time.Minute)
 
