@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -23,11 +24,12 @@ import (
 
 // maintenanceState tracks the status of the in-flight or completed migration.
 type maintenanceState struct {
-	mu       sync.Mutex
-	status   string   // "ready" | "running" | "done" | "error"
-	progress []string // accumulated log lines (capped at 500)
-	errMsg   string
-	report   *database.MigrateReport
+	mu           sync.Mutex
+	status       string   // "ready" | "running" | "done" | "error"
+	progress     []string // accumulated log lines (capped at 500)
+	errMsg       string
+	backupFailed bool // true when error is specifically from the pre-migration backup step
+	report       *database.MigrateReport
 }
 
 // runMaintenanceBoot starts a minimal HTTP server that drives a backend data
@@ -99,6 +101,10 @@ func runMaintenanceBoot(cfg *config.Config, decision database.BootDecision, mark
 		errMsg := state.errMsg
 		state.mu.Unlock()
 
+		state.mu.Lock()
+		backupFailed := state.backupFailed
+		state.mu.Unlock()
+
 		resp := fiber.Map{
 			"mode":          "maintenance",
 			"source":        decision.SourceType,
@@ -109,6 +115,7 @@ func runMaintenanceBoot(cfg *config.Config, decision database.BootDecision, mark
 			"status":        status,
 			"progress":      progress,
 			"error":         errMsg,
+			"backup_failed": backupFailed,
 		}
 		if srcCountsErr != nil {
 			resp["source_error"] = srcCountsErr.Error()
@@ -117,8 +124,17 @@ func runMaintenanceBoot(cfg *config.Config, decision database.BootDecision, mark
 	})
 
 	// POST /api/maintenance/run
-	// Starts the migration in the background. Returns 409 if already running or done.
+	// Starts the migration in the background. Accepts optional JSON body
+	// { "skip_backup": true } to bypass the pre-migration backup — only use
+	// this after a backup failure you have already acknowledged.
+	// Returns 409 if already running or done.
 	mg.Post("/maintenance/run", func(c *fiber.Ctx) error {
+		var req struct {
+			SkipBackup bool `json:"skip_backup"`
+		}
+		_ = c.BodyParser(&req)
+		skipBackup := req.SkipBackup
+
 		state.mu.Lock()
 		switch state.status {
 		case "running":
@@ -131,6 +147,7 @@ func runMaintenanceBoot(cfg *config.Config, decision database.BootDecision, mark
 		state.status = "running"
 		state.progress = nil
 		state.errMsg = ""
+		state.backupFailed = false
 		state.mu.Unlock()
 
 		go func() {
@@ -142,6 +159,34 @@ func runMaintenanceBoot(cfg *config.Config, decision database.BootDecision, mark
 				state.mu.Unlock()
 				slog.InfoContext(ctx, "migration: "+line)
 			})
+
+			// Back up the target before wiping it, so data can be recovered if
+			// the migration is interrupted or incorrect. The operator can bypass
+			// this step after acknowledging a backup failure by re-running with
+			// skip_backup: true.
+			if !skipBackup {
+				_, dstTotal, _ := database.RowCounts(ctx, dstCfg)
+				if dstTotal > 0 {
+					backupDir := filepath.Join(filepath.Dir(markerPath), "database-backups")
+					prog(fmt.Sprintf("Backing up existing %s database (%d rows) before wipe...", decision.TargetType, dstTotal))
+					backupPath, backupErr := database.BackupToSQL(ctx, dstCfg, backupDir, prog)
+					if backupErr != nil {
+						state.mu.Lock()
+						state.status = "error"
+						state.errMsg = fmt.Sprintf(
+							"Pre-migration backup failed: %s\n\nEnsure the backup directory is writable, then retry. "+
+								"If you understand the risk and want to proceed without a backup, use the 'Proceed Without Backup' option.",
+							backupErr)
+						state.backupFailed = true
+						state.mu.Unlock()
+						slog.ErrorContext(ctx, "Pre-migration backup failed — migration halted", "err", backupErr)
+						return
+					}
+					prog(fmt.Sprintf("Backup saved: %s", backupPath))
+				}
+			} else {
+				prog("Backup step skipped at operator request.")
+			}
 
 			report, err := database.MigrateData(ctx, srcCfg, dstCfg, prog)
 
@@ -228,8 +273,8 @@ func maintenanceDBConfig(backendType string, cfg *config.Config) database.Config
 	return database.Config{Type: "sqlite", DatabasePath: cfg.Database.Path}
 }
 
-// maintenanceHandleTestConnection validates a database connection string or path
-// is reachable without running migrations.
+// maintenanceHandleTestConnection probes a database endpoint and returns a
+// user-facing status. See database.TestDBConnection for the three SQLite cases.
 func maintenanceHandleTestConnection(c *fiber.Ctx) error {
 	var req struct {
 		Type string `json:"type"`
@@ -243,10 +288,11 @@ func maintenanceHandleTestConnection(c *fiber.Ctx) error {
 		return api.RespondBadRequest(c, "type must be sqlite or postgres", "")
 	}
 	cfg := database.Config{Type: req.Type, DatabasePath: req.Path, DSN: req.DSN}
-	if err := database.PingDB(c.Context(), cfg); err != nil {
-		return api.RespondBadRequest(c, "connection test failed", err.Error())
+	result := database.TestDBConnection(c.Context(), cfg)
+	if result.Status == "error" {
+		return api.RespondBadRequest(c, result.Message, "")
 	}
-	return api.RespondMessage(c, "connection successful")
+	return api.RespondSuccess(c, fiber.Map{"status": result.Status, "message": result.Message})
 }
 
 // setupMaintenanceSPARoutes wires the embedded (or on-disk) frontend SPA.
