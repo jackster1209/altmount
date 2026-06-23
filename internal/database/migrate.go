@@ -356,7 +356,16 @@ func BackupToSQL(ctx context.Context, cfg Config, backupDir string, progress Pro
 	defer db.Close()
 
 	ts := time.Now().UTC().Format("20060102-150405")
-	filename := fmt.Sprintf("altmount-%s-migration-%s.sql", cfg.Type, ts)
+	// Backup is always of the target before it is wiped, so the direction is
+	// the inverse of cfg.Type: backing up postgres means we're doing sql→pg,
+	// backing up sqlite means we're doing pg→sql.
+	var direction string
+	if cfg.Type == "postgres" {
+		direction = "sql2pg"
+	} else {
+		direction = "pg2sql"
+	}
+	filename := fmt.Sprintf("altmount_%s-%s.sql", direction, ts)
 	filePath := filepath.Join(backupDir, filename)
 
 	f, err := os.Create(filePath)
