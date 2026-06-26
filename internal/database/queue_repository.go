@@ -178,7 +178,7 @@ func (r *QueueRepository) AddToQueue(ctx context.Context, item *ImportQueueItem)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 		ON CONFLICT(nzb_path) DO UPDATE SET
 		download_id = COALESCE(excluded.download_id, import_queue.download_id),
-		priority = CASE WHEN excluded.priority < priority THEN excluded.priority ELSE priority END,
+		priority = CASE WHEN excluded.priority < import_queue.priority THEN excluded.priority ELSE import_queue.priority END,
 		category = excluded.category,
 		batch_id = excluded.batch_id,
 		metadata = excluded.metadata,
@@ -190,7 +190,7 @@ func (r *QueueRepository) AddToQueue(ctx context.Context, item *ImportQueueItem)
 		started_at = NULL,
 		updated_at = datetime('now'),
 		relative_path = excluded.relative_path
-		WHERE status NOT IN ('processing', 'pending')
+		WHERE import_queue.status NOT IN ('processing', 'pending')
 	`
 
 	args := []any{item.DownloadID, item.NzbPath, item.RelativePath, item.Category, item.Priority, item.Status,
@@ -380,7 +380,7 @@ func (r *QueueRepository) IncrementDailyStat(ctx context.Context, statType strin
 		INSERT INTO import_daily_stats (day, %s, updated_at)
 		VALUES (date('now'), 1, datetime('now'))
 		ON CONFLICT(day) DO UPDATE SET
-		%s = %s + 1,
+		%s = import_daily_stats.%s + 1,
 		updated_at = datetime('now')
 	`, column, column, column)
 
@@ -406,7 +406,7 @@ func (r *QueueRepository) IncrementHourlyStat(ctx context.Context, statType stri
 		INSERT INTO import_hourly_stats (hour, %s, updated_at)
 		VALUES (?, 1, datetime('now'))
 		ON CONFLICT(hour) DO UPDATE SET
-		%s = %s + 1,
+		%s = import_hourly_stats.%s + 1,
 		updated_at = datetime('now')
 	`, column, column, column)
 
@@ -689,13 +689,13 @@ func (r *QueueRepository) AddBatchToQueue(ctx context.Context, items []*ImportQu
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 			ON CONFLICT(nzb_path) DO UPDATE SET
 			download_id = COALESCE(excluded.download_id, import_queue.download_id),
-			priority = CASE WHEN excluded.priority < priority THEN excluded.priority ELSE priority END,
+			priority = CASE WHEN excluded.priority < import_queue.priority THEN excluded.priority ELSE import_queue.priority END,
 			category = excluded.category,
 			batch_id = excluded.batch_id,
 			metadata = excluded.metadata,
 			file_size = excluded.file_size,
 			updated_at = datetime('now')
-			WHERE status NOT IN ('processing', 'completed')
+			WHERE import_queue.status NOT IN ('processing', 'completed')
 		`
 
 		// The statement is identical for every item, so prepare it once and reuse

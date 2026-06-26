@@ -105,7 +105,7 @@ CREATE TABLE media_files (
     instance_type TEXT NOT NULL CHECK(instance_type IN ('radarr', 'sonarr')),
     external_id INTEGER NOT NULL,
     file_path TEXT NOT NULL,
-    file_size INTEGER,
+    file_size BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

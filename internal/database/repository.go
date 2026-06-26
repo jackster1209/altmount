@@ -107,14 +107,14 @@ func (r *Repository) AddToQueue(ctx context.Context, item *ImportQueueItem) erro
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 		ON CONFLICT(nzb_path) DO UPDATE SET
 		download_id = COALESCE(excluded.download_id, import_queue.download_id),
-		priority = CASE WHEN excluded.priority < priority THEN excluded.priority ELSE priority END,
+		priority = CASE WHEN excluded.priority < import_queue.priority THEN excluded.priority ELSE import_queue.priority END,
 		category = excluded.category,
 		batch_id = excluded.batch_id,
 		metadata = excluded.metadata,
 		file_size = excluded.file_size,
 		target_path = excluded.target_path,
 		updated_at = datetime('now')
-		WHERE status NOT IN ('processing', 'completed')
+		WHERE import_queue.status NOT IN ('processing', 'completed')
 	`
 
 	args := []any{item.DownloadID, item.NzbPath, item.RelativePath, item.Category, item.Priority, item.Status,
@@ -209,14 +209,14 @@ func (r *Repository) AddBatchToQueue(ctx context.Context, items []*ImportQueueIt
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 			ON CONFLICT(nzb_path) DO UPDATE SET
 			download_id = COALESCE(excluded.download_id, import_queue.download_id),
-			priority = CASE WHEN excluded.priority < priority THEN excluded.priority ELSE priority END,
+			priority = CASE WHEN excluded.priority < import_queue.priority THEN excluded.priority ELSE import_queue.priority END,
 			category = excluded.category,
 			batch_id = excluded.batch_id,
 			metadata = excluded.metadata,
 			file_size = excluded.file_size,
 			target_path = excluded.target_path,
 			updated_at = datetime('now')
-			WHERE status NOT IN ('processing', 'completed')
+			WHERE import_queue.status NOT IN ('processing', 'completed')
 		`
 
 		now := time.Now()
@@ -298,7 +298,7 @@ func (r *Repository) IncrementDailyStat(ctx context.Context, statType string) er
 		INSERT INTO import_daily_stats (day, %s, updated_at)
 		VALUES (date('now'), 1, datetime('now'))
 		ON CONFLICT(day) DO UPDATE SET
-		%s = %s + 1,
+		%s = import_daily_stats.%s + 1,
 		updated_at = datetime('now')
 	`, column, column, column)
 
@@ -1295,7 +1295,7 @@ func (r *Repository) AddBytesDownloadedToDailyStat(ctx context.Context, bytes in
 		INSERT INTO import_daily_stats (day, bytes_downloaded, updated_at)
 		VALUES (date('now'), ?, datetime('now'))
 		ON CONFLICT(day) DO UPDATE SET
-		bytes_downloaded = bytes_downloaded + excluded.bytes_downloaded,
+		bytes_downloaded = import_daily_stats.bytes_downloaded + excluded.bytes_downloaded,
 		updated_at = datetime('now')
 	`
 
@@ -1312,7 +1312,7 @@ func (r *Repository) AddProviderBytesToHourlyStat(ctx context.Context, providerI
 		INSERT INTO provider_hourly_stats (hour, provider_id, bytes_downloaded, updated_at)
 		VALUES (?, ?, ?, datetime('now'))
 		ON CONFLICT(hour, provider_id) DO UPDATE SET
-			bytes_downloaded = bytes_downloaded + excluded.bytes_downloaded,
+			bytes_downloaded = provider_hourly_stats.bytes_downloaded + excluded.bytes_downloaded,
 			updated_at = datetime('now')
 	`
 
@@ -1563,7 +1563,7 @@ func (r *Repository) AddBytesDownloadedToHourlyStat(ctx context.Context, bytes i
 		INSERT INTO import_hourly_stats (hour, bytes_downloaded, updated_at)
 		VALUES (?, ?, datetime('now'))
 		ON CONFLICT(hour) DO UPDATE SET
-		bytes_downloaded = bytes_downloaded + excluded.bytes_downloaded,
+		bytes_downloaded = import_hourly_stats.bytes_downloaded + excluded.bytes_downloaded,
 		updated_at = datetime('now')
 	`
 
@@ -1585,7 +1585,7 @@ func (r *Repository) IncrementHourlyStat(ctx context.Context, statType string) e
 		INSERT INTO import_hourly_stats (hour, %s, updated_at)
 		VALUES (?, 1, datetime('now'))
 		ON CONFLICT(hour) DO UPDATE SET
-		%s = %s + 1,
+		%s = import_hourly_stats.%s + 1,
 		updated_at = datetime('now')
 	`, column, column, column)
 
