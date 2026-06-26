@@ -61,7 +61,30 @@ func (p ProgressFunc) emit(format string, args ...any) {
 //
 // The caller is responsible for ensuring the source is quiescent (no concurrent
 // writers) for the duration of the copy so the snapshot is consistent.
+// prepareSQLiteTarget removes an existing SQLite database file and any
+// accompanying WAL/SHM files so the migration always writes into a clean
+// database. Leftover WAL or SHM files from a previous run can corrupt the
+// freshly migrated data if SQLite replays them on first open.
+func prepareSQLiteTarget(path string, progress ProgressFunc) error {
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", p, err)
+		}
+	}
+	progress.emit("  removed existing SQLite database (and WAL/SHM if present): %s", path)
+	return nil
+}
+
 func MigrateData(ctx context.Context, src, dst Config, progress ProgressFunc) (*MigrateReport, error) {
+	// For a SQLite target, delete the existing file plus any WAL/SHM files
+	// before opening. NewDB will then create a fresh database and run
+	// migrations, giving us a clean slate without needing to DELETE rows.
+	if dst.Type == "sqlite" {
+		if err := prepareSQLiteTarget(dst.DatabasePath, progress); err != nil {
+			return nil, fmt.Errorf("prepare sqlite target: %w", err)
+		}
+	}
+
 	srcDB, err := NewDB(src)
 	if err != nil {
 		return nil, fmt.Errorf("open source database: %w", err)
@@ -96,11 +119,15 @@ func MigrateData(ctx context.Context, src, dst Config, progress ProgressFunc) (*
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Wipe existing application rows, children before parents.
-	for i := len(appCopyOrder) - 1; i >= 0; i-- {
-		table := appCopyOrder[i]
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			return nil, fmt.Errorf("clear target table %s: %w", table, err)
+	// Wipe existing application rows for a Postgres target (children before
+	// parents for FK safety). SQLite targets are handled above by deleting the
+	// file entirely, so no DELETE pass is needed here.
+	if dstDialect == DialectPostgres {
+		for i := len(appCopyOrder) - 1; i >= 0; i-- {
+			table := appCopyOrder[i]
+			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+				return nil, fmt.Errorf("clear target table %s: %w", table, err)
+			}
 		}
 	}
 
@@ -293,6 +320,15 @@ func columnTypes(ctx context.Context, db *sql.DB, d Dialect, table string) (map[
 // "id" serial sequence are skipped.
 func resetPostgresSequences(ctx context.Context, dst *sql.DB, progress ProgressFunc) error {
 	for _, table := range appCopyOrder {
+		var hasID bool
+		if err := dst.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name=$1 AND column_name='id')",
+			table).Scan(&hasID); err != nil {
+			return fmt.Errorf("check id column for %s: %w", table, err)
+		}
+		if !hasID {
+			continue
+		}
 		var seq sql.NullString
 		if err := dst.QueryRowContext(ctx, "SELECT pg_get_serial_sequence($1, 'id')", table).Scan(&seq); err != nil {
 			return fmt.Errorf("resolve sequence for %s: %w", table, err)
@@ -347,7 +383,16 @@ func BackupToSQL(ctx context.Context, cfg Config, backupDir string, progress Pro
 	defer db.Close()
 
 	ts := time.Now().UTC().Format("20060102-150405")
-	filename := fmt.Sprintf("altmount-%s-migration-%s.sql", cfg.Type, ts)
+	// Backup is always of the target before it is wiped, so the direction is
+	// the inverse of cfg.Type: backing up postgres means we're doing sql→pg,
+	// backing up sqlite means we're doing pg→sql.
+	var direction string
+	if cfg.Type == "postgres" {
+		direction = "sql2pg"
+	} else {
+		direction = "pg2sql"
+	}
+	filename := fmt.Sprintf("altmount_%s-%s.sql", direction, ts)
 	filePath := filepath.Join(backupDir, filename)
 
 	f, err := os.Create(filePath)
