@@ -13,6 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/javi11/altmount/internal/auth"
 	"github.com/javi11/altmount/internal/config"
+	"github.com/javi11/altmount/internal/database"
 	"github.com/javi11/altmount/internal/slogutil"
 	"github.com/javi11/nntppool/v4"
 )
@@ -1092,4 +1093,26 @@ func (s *Server) getAPIKeyForConfig(c *fiber.Ctx) string {
 	}
 
 	return ""
+}
+
+// handleTestDatabaseConnection validates that the given database endpoint is
+// reachable. For postgres it opens and pings the connection; for sqlite it
+// checks that the parent directory is accessible. Migrations are never run.
+func (s *Server) handleTestDatabaseConnection(c *fiber.Ctx) error {
+	var req struct {
+		Type string `json:"type"`
+		Path string `json:"path"`
+		DSN  string `json:"dsn"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return RespondBadRequest(c, "invalid request body", err.Error())
+	}
+	if req.Type != "sqlite" && req.Type != "postgres" {
+		return RespondBadRequest(c, "type must be sqlite or postgres", "")
+	}
+	cfg := database.Config{Type: req.Type, DatabasePath: req.Path, DSN: req.DSN}
+	if err := database.PingDB(c.Context(), cfg); err != nil {
+		return RespondBadRequest(c, "connection test failed", err.Error())
+	}
+	return RespondMessage(c, "connection successful")
 }
