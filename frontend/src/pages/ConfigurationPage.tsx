@@ -519,6 +519,7 @@ export function ConfigurationPage() {
 										onRefresh={async () => {
 											await refetch();
 										}}
+										onRestartRequired={addRestartRequiredConfig}
 										isUpdating={updateConfigSection.isPending}
 									/>
 								)}

@@ -33,6 +33,7 @@ import type {
 	ConfigResponse,
 	ConfigSection,
 	ConfigUpdateRequest,
+	DatabaseUpdateRequest,
 	ProviderConfig,
 	ProviderCreateRequest,
 	ProviderReorderRequest,
@@ -724,6 +725,13 @@ class APIClient {
 		return this.request<ConfigResponse>(`/config/${section}`, {
 			method: "PATCH",
 			body: JSON.stringify(config),
+		});
+	}
+
+	async updateDatabaseConfig(config: DatabaseUpdateRequest) {
+		return this.request<ConfigResponse>("/config/database", {
+			method: "PATCH",
+			body: JSON.stringify({ database: config }),
 		});
 	}
 

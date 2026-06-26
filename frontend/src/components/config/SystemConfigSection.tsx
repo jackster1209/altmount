@@ -1,4 +1,5 @@
 import {
+	AlertTriangle,
 	Check,
 	Copy,
 	HardDrive,
@@ -8,13 +9,15 @@ import {
 	Save,
 	ShieldCheck,
 	Terminal,
+	Wifi,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { apiClient } from "../../api/client";
 import { useConfirm } from "../../contexts/ModalContext";
 import { useToast } from "../../contexts/ToastContext";
 import { useRegenerateAPIKey } from "../../hooks/useAuth";
 import { copyToClipboard } from "../../lib/utils";
-import type { ConfigResponse, LogFormData } from "../../types/config";
+import type { ConfigResponse, DatabaseConfig, LogFormData } from "../../types/config";
 import { LoadingSpinner } from "../ui/LoadingSpinner";
 import { UpdateSection } from "./UpdateSection";
 
@@ -120,6 +123,7 @@ interface SystemConfigSectionProps {
 	config: ConfigResponse;
 	onUpdate?: (section: string, data: LogFormData) => Promise<void>;
 	onRefresh?: () => Promise<void>;
+	onRestartRequired?: (configName: string) => void;
 	isReadOnly?: boolean;
 	isUpdating?: boolean;
 }
@@ -128,6 +132,7 @@ export function SystemConfigSection({
 	config,
 	onUpdate,
 	onRefresh,
+	onRestartRequired,
 	isReadOnly = false,
 	isUpdating = false,
 }: SystemConfigSectionProps) {
@@ -141,6 +146,20 @@ export function SystemConfigSection({
 	});
 	const [profilerEnabled, setProfilerEnabled] = useState(config.profiler_enabled);
 	const [hasChanges, setHasChanges] = useState(false);
+
+	// Database sub-section state
+	const [dbFormData, setDbFormData] = useState<DatabaseConfig>({
+		type: config.database.type,
+		path: config.database.path,
+		dsn: config.database.dsn,
+	});
+	const [dbHasChanges, setDbHasChanges] = useState(false);
+	const [dbIsTesting, setDbIsTesting] = useState(false);
+	const [dbIsSaving, setDbIsSaving] = useState(false);
+	const [dbTestResult, setDbTestResult] = useState<{
+		status: "ok" | "new" | "error";
+		message: string;
+	} | null>(null);
 
 	const regenerateAPIKey = useRegenerateAPIKey();
 	const { confirmAction } = useConfirm();
@@ -159,6 +178,95 @@ export function SystemConfigSection({
 		setProfilerEnabled(config.profiler_enabled);
 		setHasChanges(false);
 	}, [config.log, config.profiler_enabled]);
+
+	useEffect(() => {
+		setDbFormData({
+			type: config.database.type,
+			path: config.database.path,
+			dsn: config.database.dsn,
+		});
+		setDbHasChanges(false);
+		setDbTestResult(null);
+	}, [config.database]);
+
+	const handleDbChange = (field: keyof DatabaseConfig, value: string) => {
+		const next = { ...dbFormData, [field]: value };
+		setDbFormData(next);
+		setDbHasChanges(
+			next.type !== config.database.type ||
+				next.path !== config.database.path ||
+				next.dsn !== config.database.dsn,
+		);
+		setDbTestResult(null);
+	};
+
+	const handleDbTest = useCallback(async () => {
+		setDbIsTesting(true);
+		setDbTestResult(null);
+		try {
+			const res = await fetch("/api/config/database/test-connection", {
+				method: "POST",
+				credentials: "include",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					type: dbFormData.type || "sqlite",
+					path: dbFormData.path,
+					dsn: dbFormData.dsn,
+				}),
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				const msg =
+					(typeof body?.error === "object" ? body?.error?.message : body?.error) ||
+					body?.message ||
+					`HTTP ${res.status}`;
+				setDbTestResult({ status: "error", message: msg });
+			} else {
+				const data = body?.data ?? body;
+				setDbTestResult({
+					status: (data?.status as "ok" | "new") ?? "ok",
+					message: data?.message ?? "connection successful",
+				});
+			}
+		} catch (err) {
+			setDbTestResult({
+				status: "error",
+				message: err instanceof Error ? err.message : "Connection failed",
+			});
+		} finally {
+			setDbIsTesting(false);
+		}
+	}, [dbFormData]);
+
+	const handleDbSave = async () => {
+		if (!dbHasChanges || dbIsSaving) return;
+		setDbIsSaving(true);
+		try {
+			await apiClient.updateDatabaseConfig({
+				type: dbFormData.type,
+				path: dbFormData.path,
+				dsn: dbFormData.dsn,
+			});
+			const typeChanged = dbFormData.type !== config.database.type;
+			setDbHasChanges(false);
+			if (typeChanged) onRestartRequired?.("Database Backend");
+			showToast({
+				type: "success",
+				title: "Database Saved",
+				message: typeChanged
+					? "Backend type changed — restart required to migrate data."
+					: "Database settings saved.",
+			});
+		} catch (err) {
+			showToast({
+				type: "error",
+				title: "Error",
+				message: err instanceof Error ? err.message : "Failed to save database settings",
+			});
+		} finally {
+			setDbIsSaving(false);
+		}
+	};
 
 	const handleInputChange = (field: keyof LogFormData, value: string | number | boolean) => {
 		const newData = { ...formData, [field]: value };
@@ -416,32 +524,114 @@ export function SystemConfigSection({
 						<div className="h-px flex-1 bg-base-300/50" />
 					</div>
 
-					<div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-						<fieldset className="fieldset min-w-0">
-							<legend className="fieldset-legend font-semibold text-xs">Database Type</legend>
-							<select
-								className="select select-bordered w-full min-w-0 max-w-full bg-base-100"
-								value={config.database.type}
-								disabled={isReadOnly}
-								onChange={(_e) => {
-									// Placeholder for database update handler
-								}}
-							>
-								<option value="sqlite">SQLite (Default)</option>
-								<option value="postgres">PostgreSQL</option>
-							</select>
-						</fieldset>
+					<div className="space-y-6">
+						<div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+							<fieldset className="fieldset min-w-0">
+								<legend className="fieldset-legend font-semibold text-xs">Database Type</legend>
+								<select
+									className="select select-bordered w-full min-w-0 max-w-full bg-base-100"
+									value={dbFormData.type || "sqlite"}
+									disabled={isReadOnly}
+									onChange={(e) => handleDbChange("type", e.target.value)}
+								>
+									<option value="sqlite">SQLite (Default)</option>
+									<option value="postgres">PostgreSQL</option>
+								</select>
+							</fieldset>
 
-						<fieldset className="fieldset min-w-0">
-							<legend className="fieldset-legend font-semibold text-xs">Connection DSN</legend>
-							<input
-								type="text"
-								className="input input-bordered w-full min-w-0 max-w-full bg-base-100 font-mono text-sm"
-								value={config.database.dsn}
-								placeholder="postgres://user:pass@localhost:5432/altmount"
-								disabled={isReadOnly || config.database.type !== "postgres"}
-							/>
-						</fieldset>
+							{dbFormData.type === "postgres" ? (
+								<fieldset className="fieldset min-w-0">
+									<legend className="fieldset-legend font-semibold text-xs">
+										Connection DSN
+									</legend>
+									<input
+										type="text"
+										className="input input-bordered w-full min-w-0 max-w-full bg-base-100 font-mono text-sm"
+										value={dbFormData.dsn}
+										readOnly={isReadOnly}
+										placeholder="postgres://user:pass@host:5432/altmount?sslmode=disable"
+										onChange={(e) => handleDbChange("dsn", e.target.value)}
+									/>
+								</fieldset>
+							) : (
+								<fieldset className="fieldset min-w-0">
+									<legend className="fieldset-legend font-semibold text-xs">Database Path</legend>
+									<input
+										type="text"
+										className="input input-bordered w-full min-w-0 max-w-full bg-base-100 font-mono text-sm"
+										value={dbFormData.path}
+										readOnly={isReadOnly}
+										placeholder="/config/altmount.db"
+										onChange={(e) => handleDbChange("path", e.target.value)}
+									/>
+								</fieldset>
+							)}
+						</div>
+
+						{!isReadOnly && (
+							<div className="flex flex-col gap-3">
+								<div className="flex flex-wrap items-center gap-3">
+									<button
+										type="button"
+										className="btn btn-outline btn-sm"
+										onClick={handleDbTest}
+										disabled={
+											dbIsTesting ||
+											(dbFormData.type === "postgres" && !dbFormData.dsn)
+										}
+									>
+										{dbIsTesting ? (
+											<LoadingSpinner size="sm" />
+										) : (
+											<Wifi className="h-4 w-4" />
+										)}
+										{dbIsTesting ? "Testing…" : "Test Connection"}
+									</button>
+
+									{dbHasChanges && (
+										<button
+											type="button"
+											className="btn btn-primary btn-sm"
+											onClick={handleDbSave}
+											disabled={dbIsSaving}
+										>
+											{dbIsSaving ? (
+												<LoadingSpinner size="sm" />
+											) : (
+												<Save className="h-4 w-4" />
+											)}
+											{dbIsSaving ? "Saving…" : "Save Database"}
+										</button>
+									)}
+								</div>
+
+								{dbTestResult && (
+									<div
+										className={`alert py-2 text-sm ${
+											dbTestResult.status === "ok"
+												? "alert-success"
+												: dbTestResult.status === "new"
+												  ? "alert-warning"
+												  : "alert-error"
+										}`}
+									>
+										<span>{dbTestResult.message}</span>
+									</div>
+								)}
+
+								{dbHasChanges && dbFormData.type !== config.database.type && (
+									<div className="alert alert-warning py-2 text-sm">
+										<AlertTriangle className="h-4 w-4 shrink-0" />
+										<span>
+											Switching from{" "}
+											<strong>{config.database.type || "sqlite"}</strong> to{" "}
+											<strong>{dbFormData.type}</strong> requires a restart and
+											will trigger an automatic data migration.
+										</span>
+									</div>
+								)}
+							</div>
+						)}
 					</div>
 				</div>
 
